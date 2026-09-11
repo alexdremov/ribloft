@@ -121,8 +121,9 @@ class RibLoftCommand:
                 prev_tip.ViewObject.Visibility = False
             if rib.ViewObject is not None:
                 rib.ViewObject.Visibility = True
-        except Exception:
-            pass
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                "RibLoft: could not update feature visibility (%s)\n" % exc)
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.Selection.addSelection(rib)
 

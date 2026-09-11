@@ -29,9 +29,9 @@ import math
 import FreeCAD
 import Part
 
-from freecad.RibLoft import assign
+from freecad.RibLoft import ICONPATH, assign
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 WIRE_MATCH_MODES = ["Optimal", "Index"]
 
@@ -221,6 +221,7 @@ class RibLoftFP:
     def onDocumentRestored(self, obj):
         # Documents saved by older RibLoft versions lack newer properties.
         _init_properties(obj, design_mode=False)
+        _attach_view_provider(obj)
 
     def execute(self, obj):
         if not obj.Sources:
@@ -261,6 +262,7 @@ class PartDesignRibLoftFP:
 
     def onDocumentRestored(self, obj):
         _init_properties(obj, design_mode=True)
+        _attach_view_provider(obj)
 
     def execute(self, obj):
         if not obj.Sources:
@@ -291,6 +293,57 @@ class PartDesignRibLoftFP:
         return None
 
 
+class ViewProviderRibLoft:
+    """View provider for RibLoft features (both flavours).
+
+    Claims the source profiles as tree children (like PartDesign lofts show
+    their sketches) and provides the RibLoft icon. Methods without arguments
+    are how Gui::ViewProviderFeaturePythonImp calls the proxy.
+    """
+
+    def __init__(self, vobj=None):
+        if vobj is not None:
+            vobj.Proxy = self
+
+    def attach(self, vobj):
+        self.Object = vobj.Object
+
+    def claimChildren(self, obj=None):
+        o = obj if obj is not None else getattr(self, "Object", None)
+        return list(getattr(o, "Sources", []) or [])
+
+    def getIcon(self):
+        return ICONPATH + "/ribloft.svg"
+
+    # persistence ---------------------------------------------------------
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
+
+
+def _attach_view_provider(obj):
+    """Attach the RibLoft view provider; GUI sessions only, idempotent."""
+    if not FreeCAD.GuiUp:
+        return
+    try:
+        vobj = obj.ViewObject
+        if vobj is None:
+            return
+        if not isinstance(getattr(vobj, "Proxy", None), ViewProviderRibLoft):
+            ViewProviderRibLoft(vobj)
+    except Exception:
+        FreeCAD.Console.PrintWarning(
+            "RibLoft: could not attach view provider to %s\n" % obj.Name)
+
+
 def _as_objects(doc, sources):
     if isinstance(sources, str) or not hasattr(sources, "__iter__"):
         sources = [sources]
@@ -308,6 +361,7 @@ def makeRibLoft(doc, sources, name="RibLoft", label=None, container=None):
     objs = _as_objects(doc, sources)
     obj = doc.addObject("Part::FeaturePython", name)
     RibLoftFP(obj)
+    _attach_view_provider(obj)
     if container is not None:
         container.Group = list(container.Group) + [obj]
     obj.Sources = objs
@@ -327,6 +381,7 @@ def makePartDesignRibLoft(doc, sources, body, name="RibLoft", label=None):
     objs = _as_objects(doc, sources)
     obj = doc.addObject("PartDesign::FeaturePython", name)
     PartDesignRibLoftFP(obj)
+    _attach_view_provider(obj)
     obj.Sources = objs
     if label:
         obj.Label = label
