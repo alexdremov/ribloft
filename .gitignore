@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 *.FCBak
 *.fcstd1
+.ruff_cache
