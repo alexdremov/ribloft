@@ -24,3 +24,19 @@ class RibLoftWorkbench(FreeCADGui.Workbench):
 
 
 FreeCADGui.addWorkbench(RibLoftWorkbench())
+
+
+class _PartDesignToolbarInjector:
+    """Appends RibLoft_Create to the PartDesign workbench's modeling toolbar.
+
+    The manipulator runs for every workbench activation; workbenches without
+    a toolbar of that name silently skip the request (see
+    WorkbenchManipulatorPython::tryModifyToolBar).
+    """
+
+    def modifyToolBars(self):
+        return [{"append": "RibLoft_Create",
+                 "toolBar": "Part Design Modeling Features"}]
+
+
+FreeCADGui.addWorkbenchManipulator(_PartDesignToolbarInjector())

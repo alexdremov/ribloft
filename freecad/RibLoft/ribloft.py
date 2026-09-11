@@ -8,11 +8,20 @@ its neighbour's nearest corners before lofting. Both steps are configurable
 per object; everything is redone on each recompute, so editing the sketches
 updates the loft.
 
+Two flavours:
+
+- ``RibLoftFP`` on ``Part::FeaturePython``: standalone Part feature holding a
+  compound of the rib solids.
+- ``PartDesignRibLoftFP`` on ``PartDesign::FeaturePython``: additive PartDesign
+  feature — the ribs are fused into the Body's feature chain (``BaseFeature``),
+  like an AdditiveLoft.
+
 Usage (Python console / macro):
 
     from freecad.RibLoft import ribloft
-    ribloft.makeRibLoft(FreeCAD.ActiveDocument, ["Sketch", "Sketch001"],
-                        label="MyRibs", container=some_body)
+    ribloft.makeRibLoft(App.ActiveDocument, ["SketchA", "SketchB"], label="Ribs")
+    ribloft.makePartDesignRibLoft(App.ActiveDocument, ["SketchA", "SketchB"],
+                                  body=some_body, label="Ribs")
 """
 
 import math
@@ -22,14 +31,14 @@ import Part
 
 from freecad.RibLoft import assign
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 WIRE_MATCH_MODES = ["Optimal", "Index"]
 
 _PARAMS = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/RibLoft")
 
 
-def _init_properties(obj):
+def _init_properties(obj, design_mode):
     """Declare all RibLoft properties.
 
     Idempotent: safe to call again for objects restored from documents saved
@@ -57,7 +66,13 @@ def _init_properties(obj):
         obj.addProperty(
             "App::PropertyBool", "Solid", "RibLoft",
             "Build solids instead of shells")
-        obj.Solid = _PARAMS.GetBool("Solid", True)
+        obj.Solid = True
+        if design_mode:
+            # PartDesign features always contribute solids; keep the shared
+            # property (older documents) but freeze it.
+            obj.setEditorMode("Solid", 1)
+        else:
+            obj.Solid = _PARAMS.GetBool("Solid", True)
     if not hasattr(obj, "Ruled"):
         obj.addProperty(
             "App::PropertyBool", "Ruled", "RibLoft",
@@ -73,6 +88,11 @@ def _init_properties(obj):
             "App::PropertyInteger", "MaxDegree", "RibLoft",
             "Maximum B-spline degree (smooth mode)")
         obj.MaxDegree = _PARAMS.GetInt("MaxDegree", 5)
+    if design_mode and not hasattr(obj, "Refine"):
+        obj.addProperty(
+            "App::PropertyBool", "Refine", "RibLoft",
+            "Remove redundant edges after fusing into the body")
+        obj.Refine = _PARAMS.GetBool("Refine", True)
 
 
 def _dist2(a, b):
@@ -147,57 +167,114 @@ def _chain_loft(wires, match_corners, solid, ruled, closed, max_degree):
     return Part.makeLoft(wires, solid, ruled, closed, max_degree)
 
 
+def _source_shapes(obj):
+    """Global-space shapes of obj.Sources, in obj's own coordinate system."""
+    shapes = []
+    for s in obj.Sources:
+        sh = s.Shape.copy()
+        if hasattr(s, "getGlobalPlacement"):
+            sh.Placement = s.getGlobalPlacement()
+        shapes.append(sh)
+    # Work in this feature's own coordinate system, so a non-identity
+    # placement of a parent (Body, App::Part) does not double-transform
+    # the result.
+    inv = obj.getGlobalPlacement().inverse()
+    for sh in shapes:
+        sh.Placement = inv.multiply(sh.Placement)
+    return shapes
+
+
+def _rib_solids(obj):
+    """Pair up the wires of the sources and loft each chain into a solid."""
+    wire_sets = [list(sh.Wires) for sh in _source_shapes(obj)]
+    if not wire_sets[0]:
+        raise ValueError("RibLoft: first source has no wires")
+    chains = [[w] for w in wire_sets[0]]
+    for ws in wire_sets[1:]:
+        perm = _pair(_centroids([c[-1] for c in chains]),
+                     _centroids(ws), obj.WireMatch)
+        for i, j in enumerate(perm):
+            chains[i].append(ws[j])
+
+    solids = []
+    for k, chain in enumerate(chains):
+        try:
+            loft = _chain_loft(chain, obj.MatchCorners, True,
+                               obj.Ruled, obj.Closed, obj.MaxDegree)
+        except Exception as e:
+            raise ValueError(
+                "RibLoft: loft of wire chain %d failed: %s" % (k + 1, e))
+        if loft.isNull() or not loft.isValid():
+            raise ValueError(
+                "RibLoft: wire chain %d produced an invalid shape" % (k + 1))
+        solids.append(loft.Solids[0] if loft.Solids else loft)
+    return solids
+
+
 class RibLoftFP:
-    """Proxy for the RibLoft scripted feature."""
+    """Proxy for the standalone (Part flavour) RibLoft scripted feature."""
 
     def __init__(self, obj):
-        _init_properties(obj)
+        _init_properties(obj, design_mode=False)
         obj.Proxy = self
 
     def onDocumentRestored(self, obj):
         # Documents saved by older RibLoft versions lack newer properties.
-        _init_properties(obj)
+        _init_properties(obj, design_mode=False)
 
     def execute(self, obj):
         if not obj.Sources:
             obj.Shape = Part.Shape()
             return
-        shapes = []
-        for s in obj.Sources:
-            sh = s.Shape.copy()
-            if hasattr(s, "getGlobalPlacement"):
-                sh.Placement = s.getGlobalPlacement()
-            shapes.append(sh)
-        # Work in this feature's own coordinate system, so a non-identity
-        # placement of a parent (Body, App::Part) does not double-transform
-        # the result.
-        inv = obj.getGlobalPlacement().inverse()
-        for sh in shapes:
-            sh.Placement = inv.multiply(sh.Placement)
+        solids = _rib_solids(obj)
+        if obj.Solid:
+            obj.Shape = Part.Compound(solids)
+        else:
+            obj.Shape = Part.Compound([s.Shells[0] for s in solids
+                                       if s.Shells])
 
-        wire_sets = [list(sh.Wires) for sh in shapes]
-        if not wire_sets[0]:
-            raise ValueError("RibLoft: first source has no wires")
-        chains = [[w] for w in wire_sets[0]]
-        for ws in wire_sets[1:]:
-            perm = _pair(_centroids([c[-1] for c in chains]),
-                         _centroids(ws), obj.WireMatch)
-            for i, j in enumerate(perm):
-                chains[i].append(ws[j])
+    # persistence ---------------------------------------------------------
+    def dumps(self):
+        return None
 
-        solids = []
-        for k, chain in enumerate(chains):
-            try:
-                loft = _chain_loft(chain, obj.MatchCorners, obj.Solid,
-                                   obj.Ruled, obj.Closed, obj.MaxDegree)
-            except Exception as e:
-                raise ValueError(
-                    "RibLoft: loft of wire chain %d failed: %s" % (k + 1, e))
-            if loft.isNull() or not loft.isValid():
-                raise ValueError(
-                    "RibLoft: wire chain %d produced an invalid shape"
-                    % (k + 1))
-            solids.append(loft)
+    def loads(self, state):
+        return None
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
+
+
+class PartDesignRibLoftFP:
+    """Proxy for the additive (PartDesign flavour) RibLoft feature.
+
+    Contributes the rib solids to the Body's feature chain: the result is the
+    BaseFeature shape fused with all ribs (or just the ribs if the feature is
+    first in the chain).
+    """
+
+    def __init__(self, obj):
+        _init_properties(obj, design_mode=True)
+        obj.Proxy = self
+
+    def onDocumentRestored(self, obj):
+        _init_properties(obj, design_mode=True)
+
+    def execute(self, obj):
+        if not obj.Sources:
+            raise ValueError("RibLoft: no source profiles linked")
+        solids = _rib_solids(obj)
+        base = getattr(obj, "BaseFeature", None)
+        if base is not None:
+            base_shape = base.Shape
+            if not base_shape.isNull() and base_shape.Solids:
+                result = base_shape.multiFuse(solids)
+                if obj.Refine:
+                    result = result.removeSplitter()
+                obj.Shape = result
+                return
         obj.Shape = Part.Compound(solids)
 
     # persistence ---------------------------------------------------------
@@ -214,16 +291,21 @@ class RibLoftFP:
         return None
 
 
+def _as_objects(doc, sources):
+    if isinstance(sources, str) or not hasattr(sources, "__iter__"):
+        sources = [sources]
+    return [doc.getObject(s) if isinstance(s, str) else s for s in sources]
+
+
 def makeRibLoft(doc, sources, name="RibLoft", label=None, container=None):
-    """Create a RibLoft in `doc`; `sources` = objects or names, in flow order.
+    """Create a standalone RibLoft in `doc`; `sources` = objects or names,
+    in flow order.
 
     `container` (optional): a geo feature group (Body, App::Part) to put the
     feature into before the first recompute — should hold the sources too,
     or FreeCAD prints an out-of-scope link warning.
     """
-    if isinstance(sources, str) or not hasattr(sources, "__iter__"):
-        sources = [sources]
-    objs = [doc.getObject(s) if isinstance(s, str) else s for s in sources]
+    objs = _as_objects(doc, sources)
     obj = doc.addObject("Part::FeaturePython", name)
     RibLoftFP(obj)
     if container is not None:
@@ -231,5 +313,23 @@ def makeRibLoft(doc, sources, name="RibLoft", label=None, container=None):
     obj.Sources = objs
     if label:
         obj.Label = label
+    doc.recompute()
+    return obj
+
+
+def makePartDesignRibLoft(doc, sources, body, name="RibLoft", label=None):
+    """Create an additive RibLoft inside `body` (a PartDesign::Body).
+
+    The feature is appended to the body's feature chain (BaseFeature is wired
+    to the previous tip), so the ribs are fused into the body's existing
+    solid instead of creating a separate part.
+    """
+    objs = _as_objects(doc, sources)
+    obj = doc.addObject("PartDesign::FeaturePython", name)
+    PartDesignRibLoftFP(obj)
+    obj.Sources = objs
+    if label:
+        obj.Label = label
+    body.addObject(obj)  # inserts after the tip; wires BaseFeature/Tip
     doc.recompute()
     return obj

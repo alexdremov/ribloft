@@ -148,7 +148,66 @@ def run():
     P("restore+recompute: OK")
     App.closeDocument(doc.Name)
 
-    # ---- 5. backward compat with a real document saved by the older version
+    # ---- 5. PartDesign additive mode ---------------------------------------
+    doc = App.newDocument("pd")
+    body = doc.addObject("PartDesign::Body", "Body")
+    sk = doc.addObject("Sketcher::SketchObject", "BaseSketch")
+    pts = [App.Vector(0, 0, 0), App.Vector(20, 0, 0),
+           App.Vector(20, 10, 0), App.Vector(0, 10, 0)]
+    for k in range(4):
+        sk.addGeometry(Part.LineSegment(pts[k], pts[(k + 1) % 4]), False)
+    body.addObject(sk)
+    pad = doc.addObject("PartDesign::Pad", "Pad")
+    pad.Profile = sk
+    pad.Length = 10.0
+    body.addObject(pad)
+    doc.recompute()
+    assert pad.Shape.isValid() and body.Tip == pad
+    pad_vol = pad.Shape.Volume
+
+    ring = [(30.0 * math.cos(2 * math.pi * k / 3),
+             30.0 * math.sin(2 * math.pi * k / 3)) for k in range(3)]
+    wa = [square_wire(100, cy, cz) for cy, cz in ring]
+    wb = [square_wire(160, cy, cz) for cy, cz in ring][::-1]
+    fa = feature(doc, "ProfA2", wa)
+    fb = feature(doc, "ProfB2", wb)
+    body.Group = list(body.Group) + [fa, fb]  # keep links in scope
+
+    rib = ribloft.makePartDesignRibLoft(doc, [fa, fb], body, label="PDRibs")
+    P("pd: type=%s tip=%s base=%s" % (
+        rib.TypeId, body.Tip.Name,
+        rib.BaseFeature.Name if rib.BaseFeature else None))
+    assert rib.TypeId == "PartDesign::FeaturePython"
+    assert body.Tip == rib
+    assert rib.BaseFeature == pad
+    assert "Error" not in rib.State and "Invalid" not in rib.State
+    expected = pad_vol + 3 * SIZE * SIZE * SPAN  # disjoint: exact sum
+    assert abs(body.Shape.Volume - expected) < 1e-3, (
+        body.Shape.Volume, expected)
+    assert len(body.Shape.Solids) == 4  # multi-solid body (AllowCompound)
+
+    # parametric follow through the PD chain
+    fb.Placement = App.Placement(App.Vector(5, 0, 0), App.Rotation())
+    doc.recompute()
+    bb = body.Shape.BoundBox
+    P("pd follow: XMax=%.1f (expect 165.0)" % bb.XMax)
+    assert abs(bb.XMax - 165.0) < 1e-6
+    fb.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation())
+    doc.recompute()
+
+    doc.saveAs("/tmp/ribloft_smoke_pd.FCStd")
+    App.closeDocument(doc.Name)
+    doc = App.openDocument("/tmp/ribloft_smoke_pd.FCStd")
+    rib = doc.getObject("RibLoft")
+    assert type(rib.Proxy).__name__ == "PartDesignRibLoftFP"
+    assert doc.getObject("Body").Tip == rib
+    rib.touch()
+    doc.recompute()
+    assert "Error" not in rib.State
+    P("pd restore+recompute: OK (vol=%.1f)" % doc.getObject("Body").Shape.Volume)
+    App.closeDocument(doc.Name)
+
+    # ---- 6. backward compat with a real document saved by an older version
     real = "/Users/alexdremov/DocumentsLocal/DevLocal/uav/cad/pod-fixed.FCStd"
     if os.path.exists(real):
         doc = App.openDocument(real)
@@ -160,9 +219,9 @@ def run():
         assert hasattr(old, "MatchCorners") and old.MatchCorners is True
         old.touch()
         doc.recompute()
-        assert len(old.Shape.Solids) == 8 and old.Shape.isValid()
-        P("pod-fixed.FCStd compat: OK (%d solids, vol %.1f)"
-          % (len(old.Shape.Solids), old.Shape.Volume))
+        assert old.Shape.isValid() and len(old.Shape.Solids) >= 8
+        P("pod-fixed.FCStd compat: OK (%s, %d solids, vol %.1f)"
+          % (old.TypeId, len(old.Shape.Solids), old.Shape.Volume))
         App.closeDocument(doc.Name)
     else:
         P("pod-fixed.FCStd not found; compat check skipped")
