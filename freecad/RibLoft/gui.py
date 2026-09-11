@@ -43,15 +43,59 @@ class RibLoftCommand:
             return
         doc = FreeCAD.ActiveDocument
 
-        body = None
-        ad = FreeCADGui.ActiveDocument
-        if ad is not None:
-            body = ad.ActiveBody
+        body = self._active_body(doc, sel)
+        doc.openTransaction("RibLoft")
+        try:
+            if body is not None:
+                self._activate_design(doc, sel, body)
+            else:
+                self._activate_part(doc, sel)
+        except Exception:
+            doc.abortTransaction()
+            raise
+        doc.commitTransaction()
 
+    @staticmethod
+    def _active_body(doc, sel):
+        """The Body the ribs should join, mirroring PartDesignGui::getBody().
+
+        Gui.Document has no ActiveBody attribute; the active body lives on the
+        3D view as the 'pdbody' active object (set by double-clicking a body).
+        """
+        try:
+            view = FreeCADGui.ActiveDocument.ActiveView
+        except Exception:
+            return None
+        if view is None:
+            return None
+
+        try:
+            body = view.getActiveObject("pdbody")
+        except Exception:
+            body = None
         if body is not None:
-            self._activate_design(doc, sel, body)
-        else:
-            self._activate_part(doc, sel)
+            return body
+
+        # A document with exactly one Body: activate it, like getBody() does.
+        bodies = [o for o in doc.Objects if o.isDerivedFrom("PartDesign::Body")]
+        if len(bodies) == 1:
+            try:
+                view.setActiveObject("pdbody", bodies[0])
+            except Exception:
+                pass
+            return bodies[0]
+
+        # Otherwise only commit to a body that contains the entire selection.
+        target = None
+        for o in sel:
+            parent = o.getParentGeoFeatureGroup()
+            if parent is None or not parent.isDerivedFrom("PartDesign::Body"):
+                return None
+            if target is None:
+                target = parent
+            elif target is not parent:
+                return None
+        return target
 
     @staticmethod
     def _outside_body(sel, body):

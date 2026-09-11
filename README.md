@@ -98,6 +98,11 @@ Defaults for *new* features can be preset in
   *"Part Design Modeling Features"* toolbar on workbench activation. If it
   is missing, add the `RibLoft` command manually via *Tools → Customize →
   Toolbars*.
+- **Which body receives the ribs**: the active body (double-click a body in
+  the tree, as for any PartDesign feature — internally the view's `pdbody`
+  active object). If no body is active, a document with exactly one body
+  auto-activates it; otherwise the ribs join a body only when the entire
+  selection lies in that single body.
 - The Part flavour is a `Part::FeaturePython` holding a compound of
   solids. It can live inside a Body's `Group` (directly set — it is not a
   PartDesign feature and never becomes the Tip); reference it from other
