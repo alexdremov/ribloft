@@ -90,7 +90,7 @@ Defaults for *new* features can be preset in
 
 ```sh
 python3 -m unittest discover -s tests -v          # Hungarian solver vs brute force
-freecadcmd tests/test_feature_smoke.py            # FreeCAD feature smoke test
+freecadcmd tests/smoke_feature.py                 # FreeCAD feature smoke test (needs freecadcmd, not plain python)
 ```
 
 ## License

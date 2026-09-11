@@ -1,6 +1,6 @@
 """RibLoft feature smoke test. Run headless:
 
-    freecadcmd tests/test_feature_smoke.py
+    freecadcmd tests/smoke_feature.py
 
 Covers: optimal pairing on shuffled sections, corner matching on/off,
 wire-match modes, parametric follow, proxy restore, and (if present)
