@@ -4,7 +4,7 @@ import os
 
 ICONPATH = os.path.join(os.path.dirname(__file__), "resources", "icons")
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 # Keep this package importable WITHOUT FreeCAD (the assign solver is used and
 # unit-tested standalone). Documents store "freecad.RibLoft.ribloft" as the

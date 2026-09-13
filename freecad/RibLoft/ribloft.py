@@ -31,7 +31,7 @@ import Part
 
 from freecad.RibLoft import ICONPATH, assign
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 WIRE_MATCH_MODES = ["Optimal", "Index"]
 
@@ -315,6 +315,13 @@ class ViewProviderRibLoft:
     def getIcon(self):
         return ICONPATH + "/ribloft.svg"
 
+    def doubleClicked(self, vobj):
+        """Open the interactive edit dialog (native double-click editing)."""
+        if not FreeCAD.GuiUp:
+            return False
+        from freecad.RibLoft import taskpanel  # GUI-only module
+        return taskpanel.edit_ribloft(vobj.Object)
+
     # persistence ---------------------------------------------------------
     def dumps(self):
         return None
@@ -350,13 +357,15 @@ def _as_objects(doc, sources):
     return [doc.getObject(s) if isinstance(s, str) else s for s in sources]
 
 
-def makeRibLoft(doc, sources, name="RibLoft", label=None, container=None):
+def makeRibLoft(doc, sources, name="RibLoft", label=None, container=None,
+                recompute=True):
     """Create a standalone RibLoft in `doc`; `sources` = objects or names,
     in flow order.
 
     `container` (optional): a geo feature group (Body, App::Part) to put the
     feature into before the first recompute — should hold the sources too,
-    or FreeCAD prints an out-of-scope link warning.
+    or FreeCAD prints an out-of-scope link warning. With `recompute=False`
+    the caller owns the first recompute (interactive task panel).
     """
     objs = _as_objects(doc, sources)
     obj = doc.addObject("Part::FeaturePython", name)
@@ -367,16 +376,19 @@ def makeRibLoft(doc, sources, name="RibLoft", label=None, container=None):
     obj.Sources = objs
     if label:
         obj.Label = label
-    doc.recompute()
+    if recompute:
+        doc.recompute()
     return obj
 
 
-def makePartDesignRibLoft(doc, sources, body, name="RibLoft", label=None):
+def makePartDesignRibLoft(doc, sources, body, name="RibLoft", label=None,
+                          recompute=True):
     """Create an additive RibLoft inside `body` (a PartDesign::Body).
 
     The feature is appended to the body's feature chain (BaseFeature is wired
     to the previous tip), so the ribs are fused into the body's existing
-    solid instead of creating a separate part.
+    solid instead of creating a separate part. With `recompute=False` the
+    caller owns the first recompute (interactive task panel).
     """
     objs = _as_objects(doc, sources)
     obj = doc.addObject("PartDesign::FeaturePython", name)
@@ -386,5 +398,6 @@ def makePartDesignRibLoft(doc, sources, body, name="RibLoft", label=None):
     if label:
         obj.Label = label
     body.addObject(obj)  # inserts after the tip; wires BaseFeature/Tip
-    doc.recompute()
+    if recompute:
+        doc.recompute()
     return obj

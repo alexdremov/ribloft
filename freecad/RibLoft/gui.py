@@ -7,15 +7,20 @@ import FreeCADGui
 
 from freecad.RibLoft import ICONPATH
 from freecad.RibLoft import ribloft
+from freecad.RibLoft import taskpanel
 
 
 class RibLoftCommand:
-    """Create a RibLoft from the selected profile objects.
+    """Create a RibLoft interactively, native-loft style.
 
-    Context-sensitive: with an active PartDesign Body the ribs are fused into
-    that body's feature chain (additive, like an AdditiveLoft); without one a
-    standalone Part feature holding the rib compound is created in the
-    profiles' container.
+    The feature is created right away and an interactive task panel opens:
+    profiles are picked in the 3D view while the dialog is open (click adds,
+    Ctrl+click removes) with a live transparent preview of the loft; all
+    options are configurable from the panel. OK commits the transaction,
+    Cancel aborts it (the feature never existed). Context-sensitive: with an
+    active PartDesign Body the ribs are fused into that body's feature chain
+    (additive, like an AdditiveLoft); without one a standalone Part feature
+    holding the rib compound is created in the profiles' container.
     """
 
     def GetResources(self):
@@ -23,11 +28,12 @@ class RibLoftCommand:
             "Pixmap": ICONPATH + "/ribloft.svg",
             "MenuText": "RibLoft",
             "ToolTip": "Loft corresponding wires of two or more multi-wire "
-                       "profiles. Wires are paired between profiles and "
-                       "corner-matched automatically, so rotated or "
-                       "re-ordered sections do not produce twisted lofts. "
-                       "Select the profiles in flow order. With an active "
-                       "Body the ribs are fused into it additively.",
+                       "profiles. Opens an interactive dialog: pick profiles "
+                       "in the 3D view with a live preview; wires are paired "
+                       "between profiles and corner-matched automatically, "
+                       "so rotated or re-ordered sections do not produce "
+                       "twisted lofts. With an active Body the ribs are "
+                       "fused into it additively.",
             "CmdType": "ForEdit",
         }
 
@@ -35,25 +41,68 @@ class RibLoftCommand:
         return FreeCAD.ActiveDocument is not None
 
     def Activated(self):
-        sel = FreeCADGui.Selection.getSelection()
-        if len(sel) < 2:
-            FreeCAD.Console.PrintError(
-                "RibLoft: select at least two profile objects "
-                "(sketches with one closed wire per rib), in flow order\n")
-            return
         doc = FreeCAD.ActiveDocument
-
+        sel = list(FreeCADGui.Selection.getSelection())
+        candidates = [o for o in sel
+                      if taskpanel.is_profile_candidate(o)]
         body = self._active_body(doc, sel)
-        doc.openTransaction("RibLoft")
+
+        doc.openTransaction("Create RibLoft")
         try:
+            prev_tip = body.Tip if body is not None else None
             if body is not None:
-                self._activate_design(doc, sel, body)
+                rib = self._create_design(doc, candidates, body, prev_tip)
             else:
-                self._activate_part(doc, sel)
+                rib = self._create_part(doc, candidates)
         except Exception:
             doc.abortTransaction()
             raise
-        doc.commitTransaction()
+
+        try:
+            panel = taskpanel.RibLoftTaskPanel(doc, rib, body=body,
+                                               creating=True)
+            dialog = FreeCADGui.Control.showDialog(panel)
+        except Exception:
+            doc.abortTransaction()
+            raise
+        if dialog is not None:
+            dialog.setAutoCloseOnTransactionChange(True)
+            dialog.setAutoCloseOnDeletedDocument(True)
+            dialog.setDocumentName(doc.Name)
+
+    @staticmethod
+    def _create_design(doc, candidates, body, prev_tip):
+        rib = ribloft.makePartDesignRibLoft(doc, candidates, body,
+                                             recompute=False)
+        outside = RibLoftCommand._outside_body(candidates, body)
+        if outside:
+            FreeCAD.Console.PrintWarning(
+                "RibLoft: %s not in body '%s'; linking them anyway "
+                "(expect an out-of-scope link warning)\n"
+                % (", ".join(o.Name for o in outside), body.Label))
+        # PartDesign convention while editing: show the new tip, hide the
+        # previous feature (inside the transaction, so Cancel restores it).
+        try:
+            if prev_tip is not None and prev_tip.ViewObject is not None:
+                prev_tip.ViewObject.Visibility = False
+            if rib.ViewObject is not None:
+                rib.ViewObject.Visibility = True
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                "RibLoft: could not update feature visibility (%s)\n" % exc)
+        return rib
+
+    @staticmethod
+    def _create_part(doc, candidates):
+        container = None
+        for o in doc.Objects:
+            group = getattr(o, "Group", None)
+            if group is not None and candidates and candidates[0] in group \
+                    and hasattr(o, "Placement"):
+                container = o
+                break
+        return ribloft.makeRibLoft(doc, candidates, container=container,
+                                    recompute=False)
 
     @staticmethod
     def _active_body(doc, sel):
@@ -101,47 +150,6 @@ class RibLoftCommand:
     def _outside_body(sel, body):
         group = set(body.Group)
         return [s for s in sel if s not in group]
-
-    @staticmethod
-    def _activate_design(doc, sel, body):
-        outside = RibLoftCommand._outside_body(sel, body)
-        if outside:
-            FreeCAD.Console.PrintWarning(
-                "RibLoft: %s not in body '%s'; linking them anyway "
-                "(expect an out-of-scope link warning)\n"
-                % (", ".join(o.Name for o in outside), body.Label))
-        prev_tip = body.Tip
-        rib = ribloft.makePartDesignRibLoft(doc, sel, body, label="RibLoft")
-        FreeCAD.Console.PrintMessage(
-            "RibLoft: added %s to body '%s' (%d solids)\n"
-            % (rib.Name, body.Label, len(rib.Shape.Solids)))
-        # PartDesign convention: show the new tip, hide the previous feature
-        try:
-            if prev_tip is not None and prev_tip.ViewObject is not None:
-                prev_tip.ViewObject.Visibility = False
-            if rib.ViewObject is not None:
-                rib.ViewObject.Visibility = True
-        except Exception as exc:
-            FreeCAD.Console.PrintWarning(
-                "RibLoft: could not update feature visibility (%s)\n" % exc)
-        FreeCADGui.Selection.clearSelection()
-        FreeCADGui.Selection.addSelection(rib)
-
-    @staticmethod
-    def _activate_part(doc, sel):
-        container = None
-        for o in doc.Objects:
-            group = getattr(o, "Group", None)
-            if group is not None and sel[0] in group and \
-                    hasattr(o, "Placement"):
-                container = o
-                break
-        rib = ribloft.makeRibLoft(doc, sel, container=container)
-        FreeCAD.Console.PrintMessage(
-            "RibLoft: created %s (%d solids)\n"
-            % (rib.Name, len(rib.Shape.Solids)))
-        FreeCADGui.Selection.clearSelection()
-        FreeCADGui.Selection.addSelection(rib)
 
 
 FreeCADGui.addCommand("RibLoft_Create", RibLoftCommand())

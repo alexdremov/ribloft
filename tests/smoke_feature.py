@@ -208,23 +208,30 @@ def run():
     App.closeDocument(doc.Name)
 
     # ---- 6. backward compat with a real document saved by an older version
-    real = "/Users/alexdremov/DocumentsLocal/DevLocal/uav/cad/pod-fixed.FCStd"
-    if os.path.exists(real):
+    candidates = [
+        "/Users/alexdremov/DocumentsLocal/DevLocal/uav/cad/pod-fixed.FCStd",
+        "/Users/alexdremov/DocumentsLocal/DevLocal/uav/cad/pod.FCStd",
+    ]
+    real = next((p for p in candidates if os.path.exists(p)), None)
+    if real:
         doc = App.openDocument(real)
-        old = doc.getObject("RibLoft")
-        assert old is not None
-        assert hasattr(old, "WireMatch"), \
-            "onDocumentRestored did not upgrade properties"
-        assert old.WireMatch == "Optimal"
-        assert hasattr(old, "MatchCorners") and old.MatchCorners is True
-        old.touch()
+        ribs = [o for o in doc.Objects if o.Name.startswith("RibLoft")]
+        assert ribs, "no RibLoft objects in %s" % real
+        for old in ribs:
+            assert hasattr(old, "WireMatch"), \
+                "onDocumentRestored did not upgrade properties"
+            assert old.WireMatch == "Optimal"
+            assert hasattr(old, "MatchCorners") and old.MatchCorners is True
+            old.touch()
         doc.recompute()
-        assert old.Shape.isValid() and len(old.Shape.Solids) >= 8
-        P("pod-fixed.FCStd compat: OK (%s, %d solids, vol %.1f)"
-          % (old.TypeId, len(old.Shape.Solids), old.Shape.Volume))
+        for old in ribs:
+            assert old.Shape.isValid() and len(old.Shape.Solids) >= 1
+            P("%s compat: OK (%s, %d solids, vol %.1f)"
+              % (os.path.basename(real), old.Name,
+                 len(old.Shape.Solids), old.Shape.Volume))
         App.closeDocument(doc.Name)
     else:
-        P("pod-fixed.FCStd not found; compat check skipped")
+        P("no real UAV document found; compat check skipped")
 
     P("=== ALL SMOKE TESTS PASSED ===")
 

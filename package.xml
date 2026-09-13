@@ -3,7 +3,7 @@
   <name>RibLoft</name>
   <description
     >Parametric lofts through corresponding wires of multi-wire profiles. Wires are paired between consecutive profiles with the Hungarian algorithm and corner-matched automatically, so rotated, re-ordered or re-drawn sections do not produce twisted lofts. Typical use: ribs, frames and stringers lofted between multi-wire section sketches.</description>
-  <version>0.2.4</version>
+  <version>0.3.0</version>
   <date>2026-09-11</date>
   <author>Alex Dremov</author>
   <maintainer email="dremov.me@gmail.com">Alex Dremov</maintainer>
@@ -18,7 +18,7 @@
       <name>RibLoft</name>
       <description
             >Parametric lofts through corresponding wires of multi-wire profiles (optimal wire pairing + automatic corner matching).</description>
-      <version>0.2.4</version>
+      <version>0.3.0</version>
       <subdirectory>./</subdirectory>
       <icon>freecad/RibLoft/resources/icons/ribloft.svg</icon>
       <freecadmin>0.21.2</freecadmin>
